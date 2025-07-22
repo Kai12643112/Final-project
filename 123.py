@@ -3,6 +3,7 @@
 main.py
 
 This script performs clustering on the provided
+
 public (4D) and private (6D) datasets and outputs submission files.
 It automatically tries multiple algorithms (KMeans, GMM, Spectral,
 Agglomerative, DBSCAN) and selects the best by Silhouette Score.
