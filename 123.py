@@ -4,15 +4,18 @@ main.py
 
 This script performs clustering on the provided
 public (4D) and private (6D) datasets and outputs submission files.
-It automatically tries multiple algorithms (KMeans, GMM, Spectral) and selects
-the best by Silhouette Score for higher quality. Optionally reduces dimensionality via PCA.
+It automatically tries multiple algorithms (KMeans, GMM, Spectral, Agglomerative, DBSCAN)
+and selects the best by Silhouette Score for higher quality.
+Optionally reduces dimensionality via PCA.
 
 Usage:
     python main.py \
       [--public public_data.csv] \
       [--private private_data.csv] \
       [--id ID] \
-      [--n-init N] [--max-iter M] [--pca PCA_COMPONENTS] [--evaluate]
+      [--n-init N] [--max-iter M] \
+      [--pca PCA_COMPONENTS] [--eps EPS] [--min-samples MIN_SAMPLES] \
+      [--evaluate]
 
 Outputs:
     {id}_public.csv    # placed alongside input
@@ -25,13 +28,13 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
-from sklearn.cluster import KMeans, SpectralClustering
+from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering, DBSCAN
 from sklearn.mixture import GaussianMixture
 
 # Default student ID
 DEFAULT_ID = 'b12901163'
 # Algorithms to evaluate
-ALGORITHMS = ['kmeans', 'gmm', 'spectral']
+ALGORITHMS = ['kmeans', 'gmm', 'spectral', 'agg_ward', 'agg_complete', 'agg_average', 'dbscan']
 
 
 def check_file_exists(path: str):
@@ -42,7 +45,8 @@ def check_file_exists(path: str):
         sys.exit(1)
 
 
-def fit_and_score(X, n_clusters, algo, n_init, max_iter):
+def fit_and_score(X, n_clusters, algo, n_init, max_iter, eps, min_samples):
+    # Fit model based on algorithm
     if algo == 'kmeans':
         model = KMeans(n_clusters=n_clusters, random_state=42,
                        n_init=n_init, max_iter=max_iter, algorithm='elkan')
@@ -56,13 +60,24 @@ def fit_and_score(X, n_clusters, algo, n_init, max_iter):
                                    n_init=n_init, assign_labels='kmeans',
                                    affinity='nearest_neighbors')
         labels = model.fit_predict(X)
+    elif algo.startswith('agg_'):
+        linkage = algo.split('_')[1]
+        model = AgglomerativeClustering(n_clusters=n_clusters, linkage=linkage)
+        labels = model.fit_predict(X)
+    elif algo == 'dbscan':
+        model = DBSCAN(eps=eps, min_samples=min_samples)
+        labels = model.fit_predict(X)
     else:
         raise ValueError(f"Unsupported algorithm: {algo}")
-    score = silhouette_score(X, labels)
+    # Compute silhouette score if meaningful
+    try:
+        score = silhouette_score(X, labels)
+    except Exception:
+        score = -1.0
     return labels, score
 
 
-def process_dataset(input_path, student_id, n_clusters, n_init, max_iter, pca_components, evaluate):
+def process_dataset(input_path, student_id, n_clusters, n_init, max_iter, pca_components, eps, min_samples, evaluate):
     check_file_exists(input_path)
     df = pd.read_csv(input_path)
     ids = df['id'] if 'id' in df.columns else pd.Series(range(1, len(df)+1), name='id')
@@ -80,10 +95,10 @@ def process_dataset(input_path, student_id, n_clusters, n_init, max_iter, pca_co
         X = pca.fit_transform(X)
         print(f"Reduced to {X.shape[1]} PCA components (requested={pca_components})")
 
-    # Evaluate algorithms
+    # Evaluate all algorithms and pick best
     best_score, best_algo, best_labels = -1.0, None, None
     for algo in ALGORITHMS:
-        labels, score = fit_and_score(X, n_clusters, algo, n_init, max_iter)
+        labels, score = fit_and_score(X, n_clusters, algo, n_init, max_iter, eps, min_samples)
         print(f"Algorithm {algo} Silhouette: {score:.4f}")
         if score > best_score:
             best_score, best_algo, best_labels = score, algo, labels
@@ -107,8 +122,10 @@ def main():
     parser.add_argument('-i', '--id', dest='id', help='Student ID prefix')
     parser.add_argument('--n-init', type=int, default=20, help='n_init (default 20)')
     parser.add_argument('--max-iter', type=int, default=500, help='max_iter (default 500)')
-    parser.add_argument('--pca', type=float, default=0, 
+    parser.add_argument('--pca', type=float, default=0,
                         help='PCA components: float<1 for variance ratio, or int count')
+    parser.add_argument('--eps', type=float, default=0.5, help='DBSCAN eps (default 0.5)')
+    parser.add_argument('--min-samples', type=int, default=5, help='DBSCAN min_samples (default 5)')
     parser.add_argument('--evaluate', action='store_true', help='print silhouette')
     args = parser.parse_args()
 
@@ -118,10 +135,10 @@ def main():
 
     print("Processing public dataset...")
     process_dataset(args.public, student_id, pub_clusters,
-                    args.n_init, args.max_iter, args.pca, args.evaluate)
+                    args.n_init, args.max_iter, args.pca, args.eps, args.min_samples, args.evaluate)
     print("Processing private dataset...")
     process_dataset(args.private, student_id, priv_clusters,
-                    args.n_init, args.max_iter, args.pca, args.evaluate)
+                    args.n_init, args.max_iter, args.pca, args.eps, args.min_samples, args.evaluate)
 
 if __name__ == '__main__':
     main()
