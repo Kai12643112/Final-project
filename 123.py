@@ -2,72 +2,119 @@
 """
 main.py
 
-This script performs K-Means clustering on the provided public (4D) and private (6D) datasets
-and outputs submission files in the required format for the Final Project - Big Data.
+This script performs clustering on the provided
+public (4D) and private (6D) datasets and outputs submission files.
+It automatically tries multiple algorithms (KMeans, GMM, Spectral) and selects
+the best by Silhouette Score for higher quality.
 
 Usage:
-    python main.py --public public_data.csv --private private_data.csv --id r119020XX
+    python main.py \
+      [--public public_data.csv] \
+      [--private private_data.csv] \
+      [--id ID] \
+      [--n-init N] [--max-iter M] [--evaluate]
 
 Outputs:
-    r119020XX_public.csv  # for public dataset evaluation
-    r119020XX_private.csv # for private dataset evaluation
+    {id}_public.csv    # placed in same folder as public input
+    {id}_private.csv   # placed in same folder as private input
 """
 import argparse
+import os
+import sys
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.cluster import KMeans, SpectralClustering
+from sklearn.mixture import GaussianMixture
 
-def cluster_and_save(input_file: str, output_file: str, n_clusters: int) -> None:
-    """
-    Load the dataset, perform standardization, run K-Means, and save the labels.
-    """
-    df = pd.read_csv(input_file)
-    # Preserve original sample order via 'id' column or default index
+# Default student ID if none provided
+default_id = 'b12901163'
+# Supported algorithms
+algorithms = ['kmeans', 'gmm', 'spectral']
+
+def check_file_exists(path: str):
+    if not os.path.isfile(path):
+        print(f"Error: File not found: '{path}'")
+        print(f"Current working directory: {os.getcwd()}")
+        print("Files in this directory:", os.listdir(os.getcwd()))
+        sys.exit(1)
+
+
+def fit_and_score(X, n_clusters, algo, n_init, max_iter):
+    if algo == 'kmeans':
+        model = KMeans(n_clusters=n_clusters, random_state=42,
+                       n_init=n_init, max_iter=max_iter, algorithm='elkan')
+        labels = model.fit_predict(X)
+    elif algo == 'gmm':
+        model = GaussianMixture(n_components=n_clusters, random_state=42,
+                                 n_init=n_init, covariance_type='full')
+        labels = model.fit_predict(X)
+    elif algo == 'spectral':
+        model = SpectralClustering(n_clusters=n_clusters, random_state=42,
+                                   n_init=n_init, assign_labels='kmeans')
+        labels = model.fit_predict(X)
+    else:
+        raise ValueError(f"Unsupported algorithm: {algo}")
+    score = silhouette_score(X, labels)
+    return labels, score
+
+
+def cluster_and_save(input_path, student_id, n_clusters, n_init, max_iter, evaluate):
+    check_file_exists(input_path)
+    df = pd.read_csv(input_path)
+    # ID column handling
     if 'id' in df.columns:
         ids = df['id']
-        X = df.drop(columns=['id'])
+        features = df.drop(columns=['id'])
     else:
-        ids = pd.Series(range(len(df)), name='id')
-        X = df
+        ids = pd.Series(range(1, len(df)+1), name='id')
+        features = df
+    # Standardize
+    X = StandardScaler().fit_transform(features)
 
-    # Standardize features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Try all algorithms
+    best_score, best_algo, best_labels = -1.0, None, None
+    for algo in algorithms:
+        labels, score = fit_and_score(X, n_clusters, algo, n_init, max_iter)
+        print(f"Algorithm {algo} Silhouette: {score:.4f}")
+        if score > best_score:
+            best_score, best_algo, best_labels = score, algo, labels
+    print(f"Selected {best_algo} (Silhouette {best_score:.4f})")
 
-    # K-Means clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10, max_iter=300)
-    labels = kmeans.fit_predict(X_scaled)
+    # Determine output path in same folder as input
+    folder = os.path.dirname(os.path.abspath(input_path))
+    output_file = f"{student_id}_{os.path.basename(input_path).split('_')[0]}.csv"
+    # e.g., public_data.csv -> {id}_public.csv
+    # or private_data.csv -> {id}_private.csv
+    output_path = os.path.join(folder, output_file)
 
-    # Save submission CSV
-    submission = pd.DataFrame({'id': ids, 'label': labels})
-    submission.to_csv(output_file, index=False)
-    print(f"Saved {output_file} with {n_clusters} clusters.")
+    # Save
+    pd.DataFrame({'id': ids, 'label': best_labels}).to_csv(output_path, index=False)
+    print(f"Saved {output_path} using {best_algo}")
+    if evaluate:
+        print(f"Final Silhouette Score: {best_score:.4f}")
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Cluster public and private Big Data datasets into 4n-1 clusters'
-    )
-    parser.add_argument(
-        '--public', default='public_data.csv',
-        help='Path to the public dataset CSV (4 dimensions)'
-    )
-    parser.add_argument(
-        '--private', default='private_data.csv',
-        help='Path to the private dataset CSV (6 dimensions)'
-    )
-    parser.add_argument(
-        '--id', required=True,
-        help='Your student ID (e.g., r119020XX) to prefix output files'
-    )
-    args = parser.parse_args()
+    p = argparse.ArgumentParser(description='Auto-cluster Big Data datasets')
+    p.add_argument('--public', default='public_data.csv', help='Public CSV path')
+    p.add_argument('--private', default='private_data.csv', help='Private CSV path')
+    p.add_argument('-i', '--id', dest='id', help='Student ID for filenames')
+    p.add_argument('--n-init', type=int, default=20, help='n_init')
+    p.add_argument('--max-iter', type=int, default=500, help='max_iter')
+    p.add_argument('--evaluate', action='store_true', help='print silhouette')
+    args = p.parse_args()
 
-    public_out = f"{args.id}_public.csv"
-    private_out = f"{args.id}_private.csv"
+    student_id = args.id if args.id else default_id
 
-    # Number of clusters: 4n - 1
-    cluster_and_save(args.public, public_out, n_clusters=4*4 - 1)
-    cluster_and_save(args.private, private_out, n_clusters=4*6 - 1)
+    # clusters
+    pub_c = 4*4 - 1  # 15
+    priv_c = 4*6 - 1 # 23
+
+    print("Processing public dataset...")
+    cluster_and_save(args.public, student_id, pub_c, args.n_init, args.max_iter, args.evaluate)
+    print("Processing private dataset...")
+    cluster_and_save(args.private, student_id, priv_c, args.n_init, args.max_iter, args.evaluate)
 
 if __name__ == '__main__':
     main()
